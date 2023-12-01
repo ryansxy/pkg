@@ -19,6 +19,7 @@ import (
 	"github.com/k-cloud-labs/pkg/utils/cue"
 	"github.com/k-cloud-labs/pkg/utils/dynamiclister"
 	"github.com/k-cloud-labs/pkg/utils/metrics"
+	"github.com/k-cloud-labs/pkg/utils/origin"
 	"github.com/k-cloud-labs/pkg/utils/util"
 )
 
@@ -271,6 +272,29 @@ func (o *overrideManagerImpl) applyPolicyOverriders(ctx context.Context, rawObj,
 		}
 	}
 
+	if p.overriders.Origin != nil {
+		if validateOverrideRuleOrigin(p.overriders.Origin) {
+			return fmt.Errorf("cop is invalid: in the same cop, there cannot be a unified containerCount in OverrideRuleOriginResourceRequirements and OverrideRuleOriginResourceOversell")
+		}
+
+		traceStep(ctx, "About to get jsonPatches by origin")
+		patches, err := getJSONPatchesByOrigin(rawObj, p.overriders.Origin)
+		if err != nil {
+			return err
+		}
+		var resultPatches []overrideOption
+		for i := range patches {
+			resultPatches = append(resultPatches, overrideOption{
+				Op:    patches[i].Op,
+				Path:  patches[i].Path,
+				Value: patches[i].Value,
+			})
+		}
+
+		traceStep(ctx, "get origin jsonPatches done")
+		return applyJSONPatch(rawObj, resultPatches)
+	}
+
 	if len(p.overriders.Plaintext) > 0 {
 		metrics.OverridePolicyOverride(policyName, rawObj.GroupVersionKind())
 	}
@@ -314,6 +338,89 @@ func parseJSONPatchesByPlaintext(overriders []policyv1alpha1.PlaintextOverrider)
 		})
 	}
 	return patches
+}
+
+func hasIntersection(slice1, slice2 []int) bool {
+	elements := make(map[int]bool)
+
+	for _, v := range slice1 {
+		elements[v] = true
+	}
+
+	for _, v := range slice2 {
+		if elements[v] {
+			return true
+		}
+	}
+
+	return false
+}
+
+func validateOverrideRuleOrigin(overriders []policyv1alpha1.OverrideRuleOrigin) bool {
+	var rr []int
+	var ro []int
+	for i := range overriders {
+		if overriders[i].Type == policyv1alpha1.OverrideRuleOriginResourceRequirements {
+			rr = append(rr, overriders[i].ContainerCount)
+		}
+
+		if overriders[i].Type == policyv1alpha1.OverrideRuleOriginResourceOversell {
+			ro = append(ro, overriders[i].ContainerCount)
+		}
+	}
+
+	rrMap := make(map[int]bool)
+	for _, v := range rr {
+		rrMap[v] = true
+	}
+
+	for _, v := range ro {
+		if rrMap[v] {
+			return true
+		}
+	}
+
+	return false
+}
+
+func getJSONPatchesByOrigin(rawObj *unstructured.Unstructured, overriders []policyv1alpha1.OverrideRuleOrigin) ([]*origin.OverrideOption, error) {
+	patches := make([]*origin.OverrideOption, 0, len(overriders))
+	for i := range overriders {
+		var o origin.OriginValue
+		switch overriders[i].Type {
+		case policyv1alpha1.OverrideRuleOriginTypeAnnotations:
+			o = &origin.Annotations{Value: overriders[i].Annotations}
+		case policyv1alpha1.OverrideRuleOriginLabels:
+			o = &origin.Labels{Value: overriders[i].Labels}
+		case policyv1alpha1.OverrideRuleOriginNodeSelector:
+			o = &origin.NodeSelector{Value: overriders[i].NodeSelector}
+		case policyv1alpha1.OverrideRuleOriginHostNetwork:
+			o = &origin.HostNetWork{Value: overriders[i].HostNetwork}
+		case policyv1alpha1.OverrideRuleOriginSchedulerName:
+			o = &origin.SchedulerName{Value: overriders[i].SchedulerName}
+		case policyv1alpha1.OverrideRuleOriginAffinity:
+			o = &origin.Affinity{Value: overriders[i].Affinity}
+		case policyv1alpha1.OverrideRuleOriginTolerations:
+			o = &origin.Tolerations{Value: overriders[i].Tolerations}
+		case policyv1alpha1.OverrideRuleOriginTopologySpreadConstraints:
+			o = &origin.TopologySpreadConstraints{Value: overriders[i].TopologySpreadConstraints}
+		case policyv1alpha1.OverrideRuleOriginResourceRequirements:
+			o = &origin.ResourceRequirements{Value: overriders[i].ResourceRequirements, Count: overriders[i].ContainerCount}
+		case policyv1alpha1.OverrideRuleOriginResourceOversell:
+			o = &origin.ResourceOversell{Value: overriders[i].ResourceOversell, Count: overriders[i].ContainerCount}
+		}
+
+		patch, err := o.GetJsonPatch(rawObj, overriders[i].Replace, overriders[i].Operation)
+		if err != nil {
+			return nil, err
+		}
+		klog.V(4).InfoS("patches information:", "patch.op:", patch.Op, "patch.Path:", patch.Path, "patch.Value:", patch.Value)
+		if patch != nil {
+			patches = append(patches, patch)
+		}
+	}
+
+	return patches, nil
 }
 
 func executeCueV2(cueStr string, parameters []cue.Parameter) ([]overrideOption, error) {
