@@ -9,8 +9,10 @@ import (
 
 	jsonpatch "github.com/evanphx/json-patch"
 	admissionv1 "k8s.io/api/admission/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/klog/v2"
 
 	policyv1alpha1 "github.com/k-cloud-labs/pkg/apis/policy/v1alpha1"
@@ -127,11 +129,25 @@ func (o *overrideManagerImpl) applyClusterOverridePolicies(ctx context.Context, 
 		metrics.OverridePolicyMatched(p.name, rawObj.GroupVersionKind())
 		if err := o.applyPolicyOverriders(ctx, rawObj, oldObj, p); err != nil {
 			klog.ErrorS(err, "Failed to apply cluster overriders.", "clusteroverridepolicy", p.name, "resource", klog.KObj(rawObj), "operation", operation)
+			if rawObj.GetKind() == "Pod" {
+				var rawPod *corev1.Pod
+				runtime.DefaultUnstructuredConverter.FromUnstructured(rawObj.UnstructuredContent(), &rawPod)
+				bytes, _ := json.Marshal(rawPod)
+				klog.Errorf("The rawobj of the policy execution error is %s", string(bytes))
+			}
+
 			return nil, err
 		}
 		metrics.PolicySuccess(p.name, rawObj.GroupVersionKind())
 		klog.V(2).InfoS("Applied cluster overriders.", "clusteroverridepolicy", p.name, "resource", klog.KObj(rawObj), "operation", operation)
 		appliedOverrides.Add(p.name, p.overriders)
+	}
+
+	if rawObj.GetKind() == "Pod" {
+		var rawPod *corev1.Pod
+		runtime.DefaultUnstructuredConverter.FromUnstructured(rawObj.UnstructuredContent(), &rawPod)
+		bytes, _ := json.Marshal(rawPod)
+		klog.V(5).Infof("The rawobj of the policy is %s", string(bytes))
 	}
 
 	return appliedOverrides, nil

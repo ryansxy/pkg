@@ -10,6 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/klog/v2"
 
 	policyv1alpha1 "github.com/k-cloud-labs/pkg/apis/policy/v1alpha1"
@@ -61,7 +62,27 @@ func (m *validateManagerImpl) ApplyValidatePolicies(ctx context.Context, rawObj 
 		}, nil
 	}
 
+	if operation == admissionv1.Connect {
+		gvk := schema.GroupVersionKind{
+			Version: "v1",
+			Kind:    "Pod",
+		}
+		lister, err := m.dynamicClient.GVKToResourceLister(gvk)
+		if err != nil {
+			klog.ErrorS(err, "GetGroupVersionResource got error",
+				"apiVersion", gvk.Version, "kind", gvk.Kind, "namespace", rawObj.GetNamespace(), "name", rawObj.GetName())
+			return nil, err
+		}
+
+		obj, err := lister.ByNamespace(rawObj.GetNamespace()).Get(rawObj.GetName())
+		if err != nil {
+			return nil, err
+		}
+		rawObj = obj.(*unstructured.Unstructured)
+	}
+
 	for _, cvp := range cvps {
+		klog.Infof("Start to execute cvp", "resource", klog.KObj(cvp))
 		result, err := m.applyValidatePolicy(ctx, cvp, rawObj, oldObj, operation)
 		if err != nil {
 			klog.ErrorS(err, "Failed to applyValidatePolicy.",
@@ -72,6 +93,7 @@ func (m *validateManagerImpl) ApplyValidatePolicies(ctx context.Context, rawObj 
 		metrics.PolicySuccess(cvp.Name, rawObj.GroupVersionKind())
 
 		if !result.Valid {
+			klog.Infof("reject the validate request", "resource", klog.KObj(cvp))
 			return result, nil
 		}
 	}
@@ -91,6 +113,21 @@ func (m *validateManagerImpl) applyValidatePolicy(ctx context.Context, cvp *poli
 	metrics.ValidatePolicyMatched(cvp.Name, rawObj.GroupVersionKind())
 	klog.V(4).InfoS("resource matched a validate policy", "operation", operation, "policy", cvp.GroupVersionKind(),
 		"resource", fmt.Sprintf("%v/%v/%v", rawObj.GroupVersionKind(), rawObj.GetNamespace(), rawObj.GetName()))
+	var matchOperation bool
+	for _, rule := range cvp.Spec.ValidateRules {
+		for i := range rule.TargetOperations {
+			if rule.TargetOperations[i] == operation {
+				matchOperation = true
+			}
+		}
+	}
+
+	if !matchOperation {
+		return &ValidateResult{
+			Valid: true,
+		}, nil
+	}
+
 	for _, rule := range cvp.Spec.ValidateRules {
 		if len(rule.TargetOperations) > 0 && !util.Exists(rule.TargetOperations, operation) {
 			// no matched
