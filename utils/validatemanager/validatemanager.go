@@ -10,7 +10,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/runtime"
+	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/klog/v2"
 
 	policyv1alpha1 "github.com/k-cloud-labs/pkg/apis/policy/v1alpha1"
@@ -31,6 +32,7 @@ type ValidateManager interface {
 type validateManagerImpl struct {
 	dynamicClient dynamiclister.DynamicResourceLister
 	cvpLister     v1alpha1.ClusterValidatePolicyLister
+	podLister     corelisters.PodLister
 }
 
 type ValidateResult struct {
@@ -38,10 +40,11 @@ type ValidateResult struct {
 	Valid  bool   `json:"valid"`
 }
 
-func NewValidateManager(dynamicClient dynamiclister.DynamicResourceLister, cvpLister v1alpha1.ClusterValidatePolicyLister) ValidateManager {
+func NewValidateManager(dynamicClient dynamiclister.DynamicResourceLister, cvpLister v1alpha1.ClusterValidatePolicyLister, podLister corelisters.PodLister) ValidateManager {
 	return &validateManagerImpl{
 		dynamicClient: dynamicClient,
 		cvpLister:     cvpLister,
+		podLister:     podLister,
 	}
 }
 
@@ -63,22 +66,21 @@ func (m *validateManagerImpl) ApplyValidatePolicies(ctx context.Context, rawObj 
 	}
 
 	if operation == admissionv1.Connect {
-		gvk := schema.GroupVersionKind{
-			Version: "v1",
-			Kind:    "Pod",
-		}
-		lister, err := m.dynamicClient.GVKToResourceLister(gvk)
+		obj, err := m.podLister.Pods(rawObj.GetNamespace()).Get(rawObj.GetName())
 		if err != nil {
-			klog.ErrorS(err, "GetGroupVersionResource got error",
-				"apiVersion", gvk.Version, "kind", gvk.Kind, "namespace", rawObj.GetNamespace(), "name", rawObj.GetName())
 			return nil, err
 		}
 
-		obj, err := lister.ByNamespace(rawObj.GetNamespace()).Get(rawObj.GetName())
+		unstructuredObj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("error converting pod to unstructured: %s", err.Error())
 		}
-		rawObj = obj.(*unstructured.Unstructured)
+
+		unstructuredPod := &unstructured.Unstructured{
+			Object: unstructuredObj,
+		}
+
+		rawObj = unstructuredPod
 	}
 
 	for _, cvp := range cvps {
