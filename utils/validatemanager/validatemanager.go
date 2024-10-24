@@ -8,6 +8,7 @@ import (
 
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -69,6 +70,11 @@ func (m *validateManagerImpl) ApplyValidatePolicies(ctx context.Context, rawObj 
 		obj, err := m.podLister.Pods(rawObj.GetNamespace()).Get(rawObj.GetName())
 		if err != nil {
 			return nil, err
+		}
+
+		obj.TypeMeta = metav1.TypeMeta{
+			Kind:       "Pod",
+			APIVersion: "v1",
 		}
 
 		unstructuredObj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
