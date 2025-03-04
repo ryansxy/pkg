@@ -100,6 +100,15 @@ var (
 		},
 		[]string{"resource_type"},
 	)
+
+	readyPodCount = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Subsystem: SubSystemName,
+			Name:      "ready_pod_count",
+			Help:      "count of ready pods",
+		},
+		[]string{"resource_type"},
+	)
 )
 
 func init() {
@@ -112,6 +121,7 @@ func init() {
 		validatePolicyRejectCount,
 		policyErrorCount,
 		resourceSyncErrorCount,
+		readyPodCount,
 	)
 }
 
@@ -170,4 +180,8 @@ func SyncResourceError(resourceGVK schema.GroupVersionKind) {
 	resourceSyncErrorCount.WithLabelValues(
 		fmt.Sprintf("%s/%s/%s", resourceGVK.Group, resourceGVK.Version, resourceGVK.Kind),
 	).Inc()
+}
+
+func SetReadyPodCount(resourceType string, n int64) {
+	readyPodCount.WithLabelValues(resourceType).Set(float64(n))
 }

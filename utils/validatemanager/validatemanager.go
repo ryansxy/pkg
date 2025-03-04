@@ -90,7 +90,7 @@ func (m *validateManagerImpl) ApplyValidatePolicies(ctx context.Context, rawObj 
 	}
 
 	for _, cvp := range cvps {
-		klog.Infof("Start to execute cvp", "resource", klog.KObj(cvp))
+		klog.InfoS("Start to execute cvp", "resource", klog.KObj(cvp))
 		result, err := m.applyValidatePolicy(ctx, cvp, rawObj, oldObj, operation)
 		if err != nil {
 			klog.ErrorS(err, "Failed to applyValidatePolicy.",
@@ -101,7 +101,7 @@ func (m *validateManagerImpl) ApplyValidatePolicies(ctx context.Context, rawObj 
 		metrics.PolicySuccess(cvp.Name, rawObj.GroupVersionKind())
 
 		if !result.Valid {
-			klog.Infof("reject the validate request", "resource", klog.KObj(cvp))
+			klog.InfoS("reject the validate request", "resource", klog.KObj(cvp), "objName", klog.KObj(rawObj))
 			return result, nil
 		}
 	}
